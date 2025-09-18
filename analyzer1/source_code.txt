@@ -1,0 +1,18 @@
+  1: #include <stdio.h>
+  2: 
+  3: int sum(int a, int b) {
+  4:     return a + b;
+  5: }
+  6: 
+  7: int main() {
+  8:     int x = 5;
+  9:     printf("c: %d\n", c);
+ 10:     int y = 10;
+ 11:     int result = sum(x, y);
+ 12:     printf("result: %d\n", result);
+ 13:     printf("z: %d\n", z);
+ 14:     printf("w: %d\n", w);
+ 15:     int t = v + 5;
+ 16:     printf("t: %d\n", t);
+ 17:     return 0;
+ 18: }
