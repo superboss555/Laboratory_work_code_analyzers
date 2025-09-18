@@ -1,1 +1,4 @@
 *.h
+!*.c
+!*.cpp
+*.gitignore
