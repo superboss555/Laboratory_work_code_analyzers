@@ -23,7 +23,11 @@
 
 #define EXPECT(type, value, msg) expect(type, value, msg)
 void print_syntax_error(const char* message, int lineNumber, const char* details) {
-    if (details) {
+    // Для ошибок о пропущенной точке с запятой уменьшаем номер строки на 1
+    if (strstr(message, "Ожидается ';'") != NULL) {
+        printf("Синтаксическая ошибка в строке %d: Ожидается ';'\n", lineNumber - 1);
+    }
+    else if (details) {
         printf("Синтаксическая ошибка в строке %d: %s: '%s'\n", lineNumber, message, details);
     }
     else {
@@ -67,7 +71,7 @@ void create_test_file(const char* filename) {
     fprintf(file, "}\n\n");
     fprintf(file, "int main() {\n");
     fprintf(file, "    flot x = 5;\n");
-    fprintf(file, "    printf(\"c: %%d\\n\", c);\n");
+    fprintf(file, "    printf(\"c: %%d\\n\", c)\n");
     fprintf(file, "    int y = 10;\n");
     fprintf(file, "    doubll result = sum(x, y);\n");
     fprintf(file, "    printf(\"result: %%d\\n\", result);\n");
@@ -75,7 +79,7 @@ void create_test_file(const char* filename) {
     fprintf(file, "    printf(\"w: %%d\\n\", w);\n");
     fprintf(file, "    int t = v + 5;\n");
     fprintf(file, "    printf(\"t: %%d\\n\", t);\n");
-    fprintf(file, "    return 0;\n");
+    fprintf(file, "    return 0\n");
     fprintf(file, "}\n");
 
     fclose(file);
@@ -602,6 +606,11 @@ bool match(MyTokenType type, const char* value) {
 }
 
 bool expect(MyTokenType type, const char* value, const char* expected_msg) {
+    if (currentTokenIndex >= tokenCount) {
+        print_syntax_error("Ожидается токен, но достигнут конец файла", 0, NULL);
+        return false;
+    }
+    
     Token* token = peekToken();
     if (token && token->type == type && (value == NULL || strcmp(token->value, value) == 0)) {
         currentTokenIndex++;
@@ -622,9 +631,6 @@ bool expect(MyTokenType type, const char* value, const char* expected_msg) {
                 print_syntax_error("Ожидается другой токен", token->lineNumber, token->value);
             }
         }
-    }
-    else {
-        print_syntax_error("Ожидается токен, но достигнут конец файла", 0, NULL);
     }
 
     return false;
@@ -731,9 +737,13 @@ ASTNode* parseArgumentList() {
 
 ASTNode* parseFunctionCall() {
     Token* idToken = getNextToken();
-    if (!idToken || idToken->type != MY_IDENTIFIER) return NULL;
+    if (!idToken) return NULL;
 
     if (!EXPECT(MY_SPECIAL_SYMBOL, "(", "Ожидается '(' после идентификатора функции")) {
+        // Пытаемся восстановиться
+        while (peekToken() && !match(MY_SPECIAL_SYMBOL, ";") && !match(MY_SPECIAL_SYMBOL, "}")) {
+            currentTokenIndex++;
+        }
         return NULL;
     }
 
@@ -743,6 +753,11 @@ ASTNode* parseFunctionCall() {
     add_child(callNode, argsNode);
 
     if (!EXPECT(MY_SPECIAL_SYMBOL, ")", "Ожидается ')' после аргументов функции")) {
+        // Пытаемся восстановиться
+        while (peekToken() && !match(MY_SPECIAL_SYMBOL, ";") && !match(MY_SPECIAL_SYMBOL, "}")) {
+            currentTokenIndex++;
+        }
+        free_ast(callNode);
         return NULL;
     }
 
@@ -756,6 +771,14 @@ ASTNode* parseVarDeclaration() {
         if (token) {
             if (token->type == MY_IDENTIFIER) {
                 print_syntax_error("Unknown type", token->lineNumber, token->value);
+                // Пропускаем до конца statement
+                while (peekToken() && !match(MY_SPECIAL_SYMBOL, ";")) {
+                    currentTokenIndex++;
+                }
+                // Пропускаем точку с запятой
+                if (match(MY_SPECIAL_SYMBOL, ";")) {
+                    getNextToken();
+                }
             }
             else {
                 print_syntax_error("Unknown type", token->lineNumber, token->value);
@@ -772,6 +795,10 @@ ASTNode* parseVarDeclaration() {
         // Пытаемся восстановиться, пропуская до конца объявления
         while (peekToken() && !match(MY_SPECIAL_SYMBOL, ";")) {
             currentTokenIndex++;
+        }
+        // Пропускаем точку с запятой
+        if (match(MY_SPECIAL_SYMBOL, ";")) {
+            getNextToken();
         }
         return NULL;
     }
@@ -842,18 +869,31 @@ ASTNode* parseReturnStatement() {
     }
 
     ASTNode* returnNode = create_node(NODE_RETURN, NULL, returnToken->lineNumber);
-    ASTNode* exprNode = parseExpression();
 
-    if (exprNode) {
-        add_child(returnNode, exprNode);
+    // Если следующий токен - не точка с запятой и не закрывающая скобка, парсим выражение
+    if (peekToken() && !match(MY_SPECIAL_SYMBOL, ";") && !match(MY_SPECIAL_SYMBOL, "}")) {
+        ASTNode* exprNode = parseExpression();
+        if (exprNode) {
+            add_child(returnNode, exprNode);
+        }
     }
 
-    if (!EXPECT(MY_SPECIAL_SYMBOL, ";", "Ожидается ';' после return")) {
-        return NULL;
+    // Всегда ожидаем точку с запятой после return
+    if (!EXPECT(MY_SPECIAL_SYMBOL, ";", "Ожидается ';'")) {
+        // Если нет точки с запятой, пытаемся восстановиться
+        while (peekToken() && !match(MY_SPECIAL_SYMBOL, ";") &&
+            !match(MY_SPECIAL_SYMBOL, "}") && !match(MY_SPECIAL_SYMBOL, "{")) {
+            currentTokenIndex++;
+        }
+        if (match(MY_SPECIAL_SYMBOL, ";")) {
+            getNextToken();
+        }
     }
 
     return returnNode;
 }
+
+
 Token* peekTokenAt(int offset) {
     if (currentTokenIndex + offset < tokenCount) {
         return &tokens[currentTokenIndex + offset];
@@ -865,7 +905,7 @@ ASTNode* parseStatement() {
     ASTNode* statement = NULL;
     Token* token = peekToken();
 
-    // Пропускаем пустые statement
+    // Пропускаем пустые statement (точки с запятой)
     while (match(MY_SPECIAL_SYMBOL, ";")) {
         getNextToken();
         token = peekToken();
@@ -884,10 +924,14 @@ ASTNode* parseStatement() {
         Token* next = peekTokenAt(1); // Смотрим на следующий токен
         if (next && next->type == MY_IDENTIFIER) {
             // Два идентификатора подряд - вероятно, ошибка в типе
-            print_syntax_error("Unknown type", next->lineNumber, tokens[currentTokenIndex].value);
+            print_syntax_error("Unknown type", token->lineNumber, token->value);
             // Пропускаем до конца statement
             while (peekToken() && !match(MY_SPECIAL_SYMBOL, ";")) {
                 currentTokenIndex++;
+            }
+            // Пропускаем точку с запятой, если есть
+            if (match(MY_SPECIAL_SYMBOL, ";")) {
+                getNextToken();
             }
             return NULL;
         }
@@ -895,16 +939,33 @@ ASTNode* parseStatement() {
             currentTokenIndex--; // Возвращаемся к идентификатору
             statement = parseAssignment();
         }
-        else {
+        else if (next && next->type == MY_SPECIAL_SYMBOL && strcmp(next->value, "(") == 0) {
+            // Это вызов функции
             statement = parseFunctionCall();
             if (statement && !EXPECT(MY_SPECIAL_SYMBOL, ";", "Ожидается ';' после вызова функции")) {
                 return NULL;
             }
         }
+        else {
+            // Непонятный идентификатор
+            print_syntax_error("Непонятный statement", token->lineNumber, token->value);
+            currentTokenIndex++;
+        }
+    }
+    else if (match(MY_SPECIAL_SYMBOL, ";")) {
+        // Пустой statement (просто точка с запятой)
+        getNextToken();
+        return create_node(NODE_STATEMENT, ";", token->lineNumber);
+    }
+    else {
+        // Непонятный токен
+        print_syntax_error("Непонятный statement", token->lineNumber, token->value);
+        currentTokenIndex++;
     }
 
     return statement;
 }
+
 
 
 
@@ -916,18 +977,23 @@ ASTNode* parseStatements() {
             break; // Конец блока
         }
 
+        int previousTokenIndex = currentTokenIndex;
         ASTNode* statement = parseStatement();
         if (statement) {
             add_child(statementsNode, statement);
         }
         else {
-            // Пропускаем непонятные токены
-            currentTokenIndex++;
+            // Защита от бесконечного цикла
+            if (currentTokenIndex <= previousTokenIndex) {
+                currentTokenIndex++;
+            }
         }
     }
 
     return statementsNode;
 }
+
+
 ASTNode* parseParameterList() {
     ASTNode* paramList = create_node(NODE_PARAM_LIST, NULL, 0);
 
